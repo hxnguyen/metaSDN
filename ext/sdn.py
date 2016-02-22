@@ -21,6 +21,7 @@ from pox.messenger import *
 
 
 class Controller(object):
+
     def __init__(self):
         core.openflow.addListeners(self)
         self.current_connection = None
@@ -30,6 +31,7 @@ class Controller(object):
         self.interfaces = { 'wifi' : '00:00:00:00:00:01',
                             '4g'   : '00:00:00:00:00:04',
                             'priority' : 'wifi' }
+
     def send_arp_reply(self, connection, src_mac, src_ip, dst_mac, dst_ip, port_out):
         r = arp()
         r.opcode = r.REPLY
@@ -44,6 +46,7 @@ class Controller(object):
         msg.actions.append(of.ofp_action_output(port=port_out))
         msg.in_port = of.OFPP_NONE
         connection.send(msg)
+
     def send_arp_request(self, connection, src_mac, src_ip, dst_ip, port_out):
         r = arp()
         r.opcode = r.REQUEST
@@ -82,9 +85,10 @@ class Controller(object):
                     self.send_arp_reply(self.current_connection, self.ARP_table[a.protosrc.toStr()],
                                         self.gateway, a.hwsrc.toStr(), a.protosrc.toStr(), inport)
                 else:
-                    # Default is using wifi
+                    # Default is using priority interface as specified in self.interfaces
                     self.send_arp_reply(self.current_connection, self.interfaces[self.interfaces['priority']],
                                         self.gateway, a.hwsrc.toStr(), a.protosrc.toStr(), inport)
+                    # Add IP to ARP lookup table
                     self.IP_to_Interface_Map[a.protosrc.toStr()] = self.interfaces['priority']
 
         # print '\nARP packet handled'
@@ -104,7 +108,7 @@ class Controller(object):
         print "Switch %s has come up." % (event.dpid)
         self.current_connection = event.connection
         self.switch_hwaddr = dpid_to_str(event.dpid)
-        print self.switch_hwaddr
+        # print self.switch_hwaddr
 
     def getConnection(self):
         return self.current_connection
