@@ -175,7 +175,7 @@ def messenger_service():
         t.start()
     core.call_when_ready(start, "MessengerNexus", __name__)
 
-    messenger()
+    Messenger()
 
 class ChangeInterfaceService(object):
     def __init__ (self, parent, con, event):
@@ -212,7 +212,7 @@ class ChangeInterfaceBot(ChannelBot):
             if connection not in self.clients:
                 self.clients[connection] = ChangeInterfaceService(self, connection, event)
 
-class messenger(object):
+class Messenger(object):
     def __init__(self):
         core.listen_to_dependencies(self)
     def _all_dependencies_met (self):
