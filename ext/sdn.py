@@ -2,7 +2,6 @@
 # SDN controller: change routing to the internet for specific IP
 #
 from pox.core import core
-log = core.getLogger()
 
 from pox.lib.packet.ethernet import ethernet, ETHER_BROADCAST
 from pox.lib.packet.arp import arp
@@ -12,7 +11,14 @@ from pox.lib.revent import EventHalt, Event, EventMixin
 import time
 import thread
 import pox.openflow.libopenflow_01 as of
-log = core.getLogger()
+from pox.boot import *
+from pox.messenger.tcp_transport import *
+from pox.messenger.web_transport import *
+from pox.messenger.ajax_transport import *
+from pox.messenger.log_service import *
+from pox.messenger.example import *
+from pox.messenger import *
+
 
 class Controller(object):
     def __init__(self):
@@ -21,8 +27,9 @@ class Controller(object):
         self.ARP_table = {}
         self.IP_to_Interface_Map = {}
         self.gateway = '10.0.0.1'
-        self.interfaces = {'wifi' : '00:00:00:00:00:01',
-                           '4g'   : '00:00:00:00:00:04' }
+        self.interfaces = { 'wifi' : '00:00:00:00:00:01',
+                            '4g'   : '00:00:00:00:00:04',
+                            'priority' : 'wifi' }
     def send_arp_reply(self, connection, src_mac, src_ip, dst_mac, dst_ip, port_out):
         r = arp()
         r.opcode = r.REPLY
@@ -30,7 +37,7 @@ class Controller(object):
         r.protosrc = IPAddr(src_ip)
         r.hwdst  = EthAddr(dst_mac)
         r.protodst = IPAddr(dst_ip)
-        e = ethernet(type=ethernet.ARP_TYPE, src=EthAddr(src_mac),dst=r.hwdst)
+        e = ethernet(type=ethernet.ARP_TYPE, src=EthAddr(src_mac), dst=r.hwdst)
         e.payload = r
         msg  = of.ofp_packet_out()
         msg.data = e.pack()
@@ -59,7 +66,7 @@ class Controller(object):
         inport = event.port
         packet = event.parsed
         if not packet.parsed:
-            log.warning("%s: ignoring unparsed packet", dpid_to_str(dpid))
+            #log.warning("%s: ignoring unparsed packet", dpid_to_str(dpid))
             return
         a = packet.find('arp')
         if not a:
@@ -76,9 +83,9 @@ class Controller(object):
                                         self.gateway, a.hwsrc.toStr(), a.protosrc.toStr(), inport)
                 else:
                     # Default is using wifi
-                    self.send_arp_reply(self.current_connection, self.interfaces['wifi'],
+                    self.send_arp_reply(self.current_connection, self.interfaces[self.interfaces['priority']],
                                         self.gateway, a.hwsrc.toStr(), a.protosrc.toStr(), inport)
-                    self.IP_to_Interface_Map[a.protosrc.toStr()] = 'wifi'
+                    self.IP_to_Interface_Map[a.protosrc.toStr()] = self.interfaces['priority']
 
         # print '\nARP packet handled'
         # print self.ARP_table
@@ -103,7 +110,7 @@ class Controller(object):
         return self.current_connection
 
     def clear_flows (self):
-     """ Clear flows on switch """
+        """ Clear flows on switch """
         d = of.ofp_flow_mod(command = of.OFPFC_DELETE)
         self.current_connection.send(d)
 
@@ -157,15 +164,80 @@ def test():
                 time.sleep(4)
                 core.controller.setInterfaceForIP('10.0.0.2', '4g')
                 time.sleep(4)
+                break
+            break
 
 
 
+def messenger_service():
+    def start():
+        t = TCPTransport('0.0.0.0', '7790')
+        t.start()
+    core.call_when_ready(start, "MessengerNexus", __name__)
+
+    messenger()
+
+class ChangeInterfaceService(object):
+    def __init__ (self, parent, con, event):
+        self.con = con
+        self.parent = parent
+        self.listeners = con.addListeners(self)
+
+    # We only just added the listener, so dispatch the first
+    # message manually.
+        self._handle_MessageReceived(event, event.msg)
+
+    def _handle_ConnectionClosed (self, event):
+        self.con.removeListeners(self.listeners)
+        self.parent.clients.pop(self.con, None)
+
+    def _handle_MessageReceived (self, event, msg):
+        if msg.get('CHANNEL') != 'change_interface':
+            return
+        ip = msg.get('ip')
+        interface = msg.get('interface')
+
+        print ip + " " + interface + "\n"
+        if interface not in ['wifi', '4g', 'priority']:
+            self.con.send(reply(msg,msg = "Unknown interface"))
+        core.controller.setInterfaceForIP(ip, interface)
+        self.con.send(reply(msg, msg = str(ip + ' is using ' + interface)))
+
+class ChangeInterfaceBot(ChannelBot):
+    def _init(self, extra):
+        self.clients = {}
+    def _unhandled(self, event):
+        if event.msg.get('CHANNEL') == 'change_interface':
+            connection = event.con
+            if connection not in self.clients:
+                self.clients[connection] = ChangeInterfaceService(self, connection, event)
+
+class messenger(object):
+    def __init__(self):
+        core.listen_to_dependencies(self)
+    def _all_dependencies_met (self):
+        # Set up the "controller" service
+        ChangeInterfaceBot(core.MessengerNexus.get_channel("change_interface"))
+        core.MessengerNexus.default_bot.add_bot(EchoBot)
+
+    def _handle_MessengerNexus_ChannelCreate (self, event):
+        if event.channel.name.startswith("echo_"):
+            # Ah, it's a new echo channel -- put in an EchoBot
+            EchoBot(event.channel)
 
 
 def launch():
     controller = Controller()
     core.register("controller", controller)
     thread.start_new_thread(test,())
+    core.registerNew(MessengerNexus)
+    thread.start_new_thread(messenger_service, ())
+
+
+
+
+
+
 
 
 
