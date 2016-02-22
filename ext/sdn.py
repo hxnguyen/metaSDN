@@ -131,6 +131,8 @@ class Controller(object):
         self.IP_to_Interface_Map[ip] = interface
         print self.IP_to_Interface_Map
 
+    def setPriorityInterface(self, interface):
+        self.interfaces['priority'] = interface
 
 
     #def add_flow(self,match,acions):
@@ -183,8 +185,8 @@ class ChangeInterfaceService(object):
         self.parent = parent
         self.listeners = con.addListeners(self)
 
-    # We only just added the listener, so dispatch the first
-    # message manually.
+        # We only just added the listener, so dispatch the first
+        # message manually.
         self._handle_MessageReceived(event, event.msg)
 
     def _handle_ConnectionClosed (self, event):
@@ -193,11 +195,25 @@ class ChangeInterfaceService(object):
 
     def _handle_MessageReceived (self, event, msg):
         if msg.get('CHANNEL') != 'change_interface':
+            # drop msg target for other channels
             return
         ip = msg.get('ip')
+        ip = str(ip)
         interface = msg.get('interface')
+        interface = str(interface)
+        priority = msg.get('priority')
+        priority = str(priority)
+        if ip is None:
+            if priority is None:
+                self.con.send(reply(msg, msg = str("Neither IP nor Priority Interface Provided")))
+                return
+        if priority is not None:
+            core.controller.setPriorityInterface(priority)
+            self.con.send(reply(msg, msg= str('Priority interface is now ' + priority)))
+            print core.controller.interfaces
+            return
 
-        print ip + " " + interface + "\n"
+        # print ip + " " + interface + "\n"
         if interface not in ['wifi', '4g', 'priority']:
             self.con.send(reply(msg,msg = "Unknown interface"))
         core.controller.setInterfaceForIP(ip, interface)
@@ -223,6 +239,7 @@ class Messenger(object):
     def _handle_MessengerNexus_ChannelCreate (self, event):
         if event.channel.name.startswith("echo_"):
             # Ah, it's a new echo channel -- put in an EchoBot
+            # Information about bot can be found in pox/messenger/__init__.py
             EchoBot(event.channel)
 
 
