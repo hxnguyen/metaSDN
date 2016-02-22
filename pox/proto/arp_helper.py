@@ -83,7 +83,7 @@ def send_arp_request (connection, ip, port = of.OFPP_FLOOD,
     if port in (of.OFPP_FLOOD, of.OFPP_ALL):
       for p in connection.ports.values():
         if p.config & OFPPC_NO_FLOOD:
-          if port == of.ofPP_FLOOD:
+          if port == of.OFPP_FLOOD:
             continue
         if p.port_no < 0: continue
         if p.port_no > of.OFPP_MAX: continue # Off by one?
