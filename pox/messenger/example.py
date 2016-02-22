@@ -51,7 +51,7 @@ class UpperService (object):
   def _handle_MessageReceived (self, event, msg):
     self.count += 1
     self.con.send(reply(msg, count = self.count,
-                        msg = str(msg.get('msg').upper())))
+                        msg = str(msg.get('msg').upper()) + "Thien"))
 
 
 class UpperBot (ChannelBot):
@@ -104,6 +104,9 @@ class MessengerExample (object):
 
     # Make GreetBot invitable to other channels using "invite"
     core.MessengerNexus.default_bot.add_bot(GreetBot)
+    GreetBot(core.MessengerNexus.get_channel("greet"))
+    core.MessengerNexus.default_bot.add_bot(EchoBot)
+    EchoBot(core.MessengerNexus.get_channel("EchoBot"))
 
   def _handle_MessengerNexus_ChannelCreate (self, event):
     if event.channel.name.startswith("echo_"):
