@@ -518,6 +518,7 @@ def boot (argv = None):
   try:
     if argv is None:
       argv = sys.argv[1:]
+      print(argv)
 
     # Always load cli (first!)
     #TODO: Can we just get rid of the normal options yet?
