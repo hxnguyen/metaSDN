@@ -110,7 +110,7 @@ class SimpleAddressPool (AddressPool):
   """
   Simple AddressPool for simple subnet based pools.
   """
-  def __init__ (self, network = "192.168.0.0/24", first = 1, last = None,
+  def __init__ (self, network = "192.168.1.0/24", first = 2, last = None,
                 count = None):
     """
     Simple subnet-based address pool
@@ -130,6 +130,7 @@ class SimpleAddressPool (AddressPool):
     self.network_size = network_size
     self.host_size = 32-network_size
     self.network = IPAddr(network)
+
 
     if last is None and count is None:
       self.last = (1 << self.host_size) - 2
@@ -222,7 +223,7 @@ class SimpleAddressPool (AddressPool):
 class DHCPD (EventMixin):
   _eventMixin_events = set([DHCPLease])
 
-  def __init__ (self, ip_address = "192.168.0.254", router_address = (),
+  def __init__ (self, ip_address = "192.168.1.254", router_address = (),
                 dns_address = (), pool = None, subnet = None,
                 install_flow = True):
 
@@ -238,7 +239,7 @@ class DHCPD (EventMixin):
     self.dns_addr = fix_addr(dns_address, self.router_addr)
 
     if pool is None:
-      self.pool = [IPAddr("192.168.0."+str(x)) for x in range(100,199)]
+      self.pool = [IPAddr("192.168.1."+str(x)) for x in range(100,199)]
       self.subnet = IPAddr(subnet or "255.255.255.0")
     else:
       self.pool = pool
@@ -469,10 +470,10 @@ class DHCPD (EventMixin):
 
 
 def default (no_flow = False,
-            network = "192.168.0.0/24",            # Address range
+            network = "192.168.1.0/24",            # Address range
             first = 100, last = 199, count = None, # Address range
-            ip = "192.168.0.254",
-            router = (),                   # Auto
+            ip = "192.168.1.254",
+            router = "192.168.1.1",                   # Auto
             dns = ()):                     # Auto
   """
   Launch DHCP server defaulting to 192.168.0.100-199
@@ -481,15 +482,15 @@ def default (no_flow = False,
 
 
 def launch (no_flow = False,
-            network = "192.168.0.0/24",            # Address range
-            first = 1, last = None, count = None, # Address range
-            ip = "192.168.0.254",
-            router = (),                   # Auto
+            network = "192.168.1.0/24",            # Address range
+            first = 2, last = None, count = None, # Address range
+            ip = "192.168.1.254",
+            router = "192.168.1.1",                   # Auto
             dns = ()):                     # Auto
   """
   Launch DHCP server
 
-  Defaults to serving 192.168.0.1 to 192.168.0.253
+  Defaults to serving 192.168.1.1 to 192.168.1.253
 
   network  Subnet to allocate addresses from
   first    First'th address in subnet to use (256 is x.x.1.0 in a /16)
