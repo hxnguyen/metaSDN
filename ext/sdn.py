@@ -10,15 +10,12 @@ from pox.lib.util import dpid_to_str, str_to_bool
 from pox.lib.revent import EventHalt, Event, EventMixin
 import time
 import thread
-import pox.openflow.libopenflow_01 as of
-from pox.boot import *
 from pox.messenger.tcp_transport import *
-from pox.messenger.web_transport import *
-from pox.messenger.ajax_transport import *
-from pox.messenger.log_service import *
 from pox.messenger.example import *
 from pox.messenger import *
 from pox.proto.dhcpd import *
+from pox.py import *
+from pox.proto.dns_spy import *
 
 
 class Controller(object):
@@ -28,9 +25,10 @@ class Controller(object):
         self.current_connection = None
         self.ARP_table = {}
         self.IP_to_Interface_Map = {}
-        self.gateway = '192.168.1.1'
+        self.gateway = '10.0.0.1'
+        self.dhcp_server = ".".join(self.gateway.split('.')[0:3] +  ['254'])
         self.interfaces = { 'wifi' : '00:00:00:00:00:01',
-                            '4g'   : '00:00:00:00:00:02',
+                            '4g'   : '00:00:00:00:00:04',
                             'priority' : 'wifi' }
         self.dpid = None
 
@@ -67,6 +65,14 @@ class Controller(object):
         connection.send(msg)
 
     def _handle_PacketIn(self, event):
+        """
+        Args:
+            event: event contains incoming packet
+
+        Returns: None
+        Handle ARP request for gateway and dhcp server mac address
+
+        """
         self.dpid = event.connection.dpid
         inport = event.port
         packet = event.parsed
@@ -77,6 +83,9 @@ class Controller(object):
         if not a:
             return
         if a.opcode == arp.REPLY:
+            if a.protosrc.toStr() == self.gateway or a.protosrc.toStr() == self.dhcp_server:
+                # Drop controller generated ARP packets
+                return
             self.ARP_table[a.protosrc.toStr()] = a.hwsrc.toStr()
             self.IP_to_Interface_Map[a.protosrc.toStr()] = self.interfaces['priority']
             return
@@ -85,13 +94,40 @@ class Controller(object):
             if a.protodst.toStr() == self.gateway:
                 # Perform ARP lookup here
                 if a.protosrc.toStr() in self.IP_to_Interface_Map.keys():
-                    self.send_arp_reply(self.current_connection, self.ARP_table[a.protosrc.toStr()],
-                                        self.gateway, a.hwsrc.toStr(), a.protosrc.toStr(), inport)
+                    self.send_arp_reply(self.current_connection,
+                                        self.interfaces[self.IP_to_Interface_Map[a.protosrc.toStr()]],
+                                        self.gateway,
+                                        a.hwsrc.toStr(),
+                                        a.protosrc.toStr(),
+                                        inport)
                 else:
                     # Default is using priority interface as specified in self.interfaces
-                    self.send_arp_reply(self.current_connection, self.interfaces[self.interfaces['priority']],
-                                        self.gateway, a.hwsrc.toStr(), a.protosrc.toStr(), inport)
+                    self.send_arp_reply(self.current_connection,
+                                        self.interfaces[self.interfaces['priority']],
+                                        self.gateway,
+                                        a.hwsrc.toStr(),
+                                        a.protosrc.toStr(),
+                                        inport)
                     # Add IP to ARP lookup table
+                    self.IP_to_Interface_Map[a.protosrc.toStr()] = self.interfaces['priority']
+                    self.ARP_table[a.protosrc.toStr()] = a.hwsrc.toStr()
+                return
+
+            if a.protodst.toStr() == self.dhcp_server:
+                if a.protodst.toStr() in self.IP_to_Interface_Map.keys():
+                    self.send_arp_reply(self.current_connection,
+                                        self.interfaces[self.IP_to_Interface_Map[a.a.protosrc.toStr()]],
+                                        self.dhcp_server,
+                                        a.hwsrc.toStr(),
+                                        a.protosrc.toStr(),
+                                        inport)
+                else:
+                    self.send_arp_reply(self.current_connection,
+                                        self.interfaces[self.interfaces['priority']],
+                                        self.dhcp_server,
+                                        a.hwsrc.toStr(),
+                                        a.protosrc.toStr(),
+                                        inport)
                     self.IP_to_Interface_Map[a.protosrc.toStr()] = self.interfaces['priority']
                     self.ARP_table[a.protosrc.toStr()] = a.hwsrc.toStr()
 
@@ -232,7 +268,7 @@ class ChangeInterfaceService(object):
 
         # print ip + " " + interface + "\n"
         if interface not in ['wifi', '4g', 'priority']:
-            self.con.send(reply(msg,msg = "Unknown interface"))
+            self.con.send(reply(msg,msg = "Unknown interface. Available interface are: 'wifi', '4g', 'priority'"))
         core.controller.setInterfaceForIP(ip, interface)
         self.con.send(reply(msg, msg = str(ip + ' is using ' + interface)))
 
@@ -289,9 +325,8 @@ class ControllerDHCPD(DHCPD):
             log.warn("No port %s on DPID %s", self._listen_to_ports,
             dpid_to_str(self._dpid))
             return
-        print "DHCP service serving for incoming requests on: "
         for port_name, port_no in self._listen_to_ports.items():
-            print port_name + " : " + port_no + "\n"
+            log.info("DHCP service serving for incoming requests on: %s (port_name) : %s (port_number)", port_name, port_no)
         return super(ControllerDHCPD,self)._handle_ConnectionUp(event)
 
     def _handle_PacketIn (self, event):
@@ -302,16 +337,19 @@ class ControllerDHCPD(DHCPD):
         return super(ControllerDHCPD,self)._handle_PacketIn(event)
 
 
-def launch():
+def launch(disable_interactive_shell = False):
     controller = Controller()
     core.register("controller", controller)
     #thread.start_new_thread(test,())
     core.registerNew(MessengerNexus)
-    pool = SimpleAddressPool(network="192.168.1.0/24", first=2, count=1)
-    core.registerNew(ControllerDHCPD, listen_to_ports={'eth0':""}, install_flow=True,
+    pool = SimpleAddressPool(network="10.0.0.0/24", first=2, count=1)
+    core.registerNew(ControllerDHCPD, listen_to_ports={'s1-eth2':'', 's1-eth3':''}, install_flow=True,
                      router_address=core.controller.gateway, dns_address=core.controller.gateway,
-                     ip_address="192.168.1.254", pool=pool)
+                     ip_address="10.0.0.254", pool=pool)
     thread.start_new_thread(messenger_service, ())
+    core.registerNew(DNSSpy)
+
+
 
 
 
