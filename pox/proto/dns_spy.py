@@ -127,14 +127,15 @@ class DNSSpy (EventMixin):
 
   def _handle_PacketIn (self, event):
     p = event.parsed.find('dns')
-    #print "here"
+    print "here"
     if p is not None and p.parsed:
       log.debug(p)
 
       for q in p.questions:
-        #print "here2"
+        print "here2"
+        print q.name
         if q.qclass != 1: continue # Internet only
-        #print "here3"
+        print "here3"
         self.raiseEvent(DNSLookup, q)
 
       def process_q (entry):
@@ -152,6 +153,7 @@ class DNSSpy (EventMixin):
             log.info("add dns entry: %s %s" % (entry.rddata, entry.name))
 
       for answer in p.answers:
+        print "here4"
         process_q(answer)
       for addition in p.additional:
         process_q(addition)
