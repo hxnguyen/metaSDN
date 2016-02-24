@@ -144,14 +144,23 @@ class Controller(object):
         # print '\nARP packet handled'
         # print self.ARP_table
 
-    def getMacAddressOverNetwork(self, dst_ip):
+    def getMacAddressOverNetwork(self, dst_ip, interface):
         timeout = 10
+        if dst_ip in self.ARP_table.keys():
+            log.info("Sent ARP reply for %s" ,dst_ip)
+            self.send_arp_reply(self.current_connection, src_mac=self.interfaces[interface],
+                              src_ip=self.gateway, dst_mac=self.ARP_table[dst_ip],dst_ip=dst_ip, port_out=of.OFPP_FLOOD)
+            log.info("Mac address of %s is %s", dst_ip, self.ARP_table[dst_ip])
+            return
+
         while dst_ip not in self.ARP_table.keys() and timeout > 0:
             log.info("Sending ARP request for %s" ,dst_ip)
             self.send_arp_request(self.current_connection, src_mac=self.interfaces[self.interfaces['priority']],
                               src_ip=self.gateway, dst_ip=dst_ip, port_out=of.OFPP_FLOOD)
             time.sleep(1)
             timeout = timeout - 1
+
+
         if timeout == 0 and dst_ip not in self.ARP_table.keys():
             log.warning("ARP request timeout. Controller cannot obtain MAC of %s", dst_ip)
         log.info("MAC address of %s is %s", dst_ip, self.ARP_table[dst_ip])
@@ -182,7 +191,7 @@ class Controller(object):
             log.warning("Unknown interface.")
             return
         self.awaiting_for_ARP[ip] = interface
-        thread.start_new_thread(self.getMacAddressOverNetwork, (ip, ) )
+        thread.start_new_thread(self.getMacAddressOverNetwork, (ip, interface, ) )
 
     def setPriorityInterface(self, interface):
         self.interfaces['priority'] = interface
@@ -458,9 +467,9 @@ class ControllerDHCPD(DHCPD):
 def launch(disable_interactive_shell = False):
     controller = Controller()
     core.register("controller", controller)
-    #thread.start_new_thread(test,())
+    thread.start_new_thread(test,())
     core.registerNew(MessengerNexus)
-    pool = SimpleAddressPool(network="192.168.1.0/24", first=2, count=1)
+    pool = SimpleAddressPool(network="192.168.1.0/24", first=2, last=253, count=1)
     core.registerNew(ControllerDHCPD, listen_to_ports={'eth0':''}, install_flow=True,
                      router_address=core.controller.gateway, dns_address=core.controller.gateway,
                      ip_address="192.168.1.254", pool=pool)
