@@ -32,13 +32,13 @@ log = core.getLogger()
 
 class DNSUpdate (Event):
   def __init__ (self, item):
-    Event.__init__()
+    Event.__init__(self)
     self.item = item
 
 class DNSLookup (Event):
   def __init__ (self, rr):
-    Event.__init__()
-
+    Event.__init__(self)
+    print "here"
     self.name = rr.name
     self.qtype = rr.qtype
 
@@ -64,7 +64,7 @@ class DNSSpy (EventMixin):
     self.cname = {}
 
     core.openflow.addListeners(self)
-
+    self.addListener(DNSLookup, ())
     # Add handy function to console
     core.Interactive.variables['lookup'] = self.lookup
 
@@ -134,8 +134,8 @@ class DNSSpy (EventMixin):
       for q in p.questions:
         #print "here2"
         print q.name
-        if q.qclass != 1: continue # Internet only
-        #print "here3"
+        #if q.qclass != 1: continue # Internet only
+        print "here3"
         self.raiseEvent(DNSLookup, q)
 
       def process_q (entry):
