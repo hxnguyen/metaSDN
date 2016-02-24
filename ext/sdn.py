@@ -5,17 +5,20 @@ from pox.core import core
 
 from pox.lib.packet.ethernet import ethernet, ETHER_BROADCAST
 from pox.lib.packet.arp import arp
+import pox.lib.packet as pkt
 from pox.lib.addresses import EthAddr, IPAddr
 from pox.lib.util import dpid_to_str, str_to_bool
-from pox.lib.revent import EventHalt, Event, EventMixin
+from pox.lib.revent import *
+import pox.openflow.libopenflow_01 as of
 import time
 import thread
-from pox.messenger.tcp_transport import *
-from pox.messenger import *
-from pox.proto.dhcpd import *
+from pox.messenger.tcp_transport import TCPTransport
+from pox.messenger import MessengerNexus, reply, ChannelBot
+from pox.proto.dhcpd import DHCPD, SimpleAddressPool
 from pox.py import *
-from pox.proto.dns_spy import *
+import pox.lib.packet.dns as pkt_dns
 
+log = core.getLogger()
 
 class Controller(object):
 
@@ -31,6 +34,7 @@ class Controller(object):
                             'priority' : 'wifi' }
         self.dpid = None
         self.awaiting_for_ARP = {}
+        self.switch_port_identity = {}
 
     def send_arp_reply(self, connection, src_mac, src_ip, dst_mac, dst_ip, port_out):
         r = arp()
@@ -70,7 +74,7 @@ class Controller(object):
             event: event contains incoming packet
 
         Returns: None
-        Handle ARP request for gateway and dhcp server mac address
+        Handle ARP request for gateway and dhcp server's mac address
 
         """
         self.dpid = event.connection.dpid
@@ -171,10 +175,11 @@ class Controller(object):
         log.info("Switch %s has come up." ,event.dpid)
         self.current_connection = event.connection
         self.switch_hwaddr = dpid_to_str(event.dpid)
-        # print self.switch_hwaddr
         self.dpid = event.dpid
-        #controllerDHCP = ControllerDHCPD(event, {'eth0':""})
-        #core.register("dhcp", controllerDHCP)
+        ports = event.connection.ports
+        for port in ports:
+            port_name, port_no = str(ports[port]).split(':')
+            self.switch_port_identity[port_name] = port_no
 
     def getConnection(self):
         return self.current_connection
@@ -407,6 +412,7 @@ class HelperBot(ChannelBot):
             connection = event.con
             if connection not in self.clients:
                 self.clients[connection] = HelperService(self, connection, event)
+
 class Messenger(object):
     def __init__(self):
         core.listen_to_dependencies(self)
@@ -437,17 +443,11 @@ class ControllerDHCPD(DHCPD):
     def _handle_ConnectionUp (self, event):
         ports = event.connection.ports
         self._dpid = event.dpid
-        #print str(ports['s1-eth1']).split(':')
         for port in ports:
             port_name, port_no = str(ports[port]).split(':')
-            # print port_name, port_no
             self._switch_ports[port_name] = port_no
             if self._listen_to_ports.has_key(port_name):
                 self._listen_to_ports[port_name] = port_no
-        # print "listen : "
-        # print self._listen_to_ports.keys()
-        # print "switch : "
-        # print self._switch_ports.keys()
         if not set(self._listen_to_ports.keys()).issubset(set(self._switch_ports.keys())):
             log.warn("No port %s on DPID %s", self._listen_to_ports,
             dpid_to_str(self._dpid))
@@ -463,6 +463,69 @@ class ControllerDHCPD(DHCPD):
             return
         return super(ControllerDHCPD,self)._handle_PacketIn(event)
 
+class DNSUpdateNotification(Event):
+    def __init__(self):
+        EventMixin.__init__()
+
+
+
+class DNSLookupNotification(Event):
+
+    def __init__(self, pkt_dns_question):
+        Event.__init__()
+        log.info("here")
+        self.name = pkt_dns_question.name
+        self.qtype = pkt_dns_question.qtype
+        log.info("%s is looking for %s", pkt_dns_question.protosrc.toStr(), self.name)
+    #def check_for_blocking(self):
+    #    pass
+
+class DNSFirewall(EventMixin):
+
+    _eventMixin_events = set([ DNSUpdateNotification, DNSLookupNotification ])
+
+    def __init__(self, install_flow = True):
+        self._install_flow = install_flow
+        self.ip_to_name_map = {}
+        self.name_to_ip_map = {}
+        self.cname = {}
+        self.blocking = {}
+        core.openflow.addListeners(self)
+
+    def block_this_domain(self, domain, expire):
+        self.blocking[domain] = expire
+
+    def _handle_ConnectionUp (self, event):
+        if self._install_flow:
+            # incoming DNS
+            msg = of.ofp_flow_mod()
+            msg.match = of.ofp_match()
+            msg.match.dl_type = pkt.ethernet.IP_TYPE
+            msg.match.nw_proto = pkt.ipv4.UDP_PROTOCOL
+            msg.match.tp_src = 53
+            msg.priority = 10
+            msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
+            event.connection.send(msg)
+            # outgoing DNS
+            msg = of.ofp_flow_mod()
+            msg.match = of.ofp_match()
+            msg.match.dl_type = pkt.ethernet.IP_TYPE
+            msg.match.nw_proto = pkt.ipv4.UDP_PROTOCOL
+            msg.match.tp_dst = 53
+            msg.priority = 10
+            msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
+            event.connection.send(msg)
+
+    def _handle_PacketIn(self, event):
+        dns_packet = event.parsed.find('dns')
+        if dns_packet is not None and dns_packet.parsed:
+            #log.info(p)
+            for question in dns_packet.questions:
+                if question.qclass != 1:
+                    continue # internet only
+                self.raiseEvent(DNSLookupNotification, question)
+                print "here3"
+
 
 def launch(disable_interactive_shell = False):
     controller = Controller()
@@ -474,7 +537,7 @@ def launch(disable_interactive_shell = False):
                      router_address=core.controller.gateway, dns_address=core.controller.gateway,
                      ip_address="192.168.1.254", pool=pool)
     thread.start_new_thread(messenger_service, ())
-    core.registerNew(DNSSpy)
+    core.registerNew(DNSFirewall)
 
 
 
