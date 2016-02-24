@@ -24,10 +24,10 @@ class Controller(object):
         self.current_connection = None
         self.ARP_table = {}
         self.IP_to_Interface_Map = {}
-        self.gateway = '10.0.0.1'
+        self.gateway = '192.168.1.1'
         self.dhcp_server = ".".join(self.gateway.split('.')[0:3] +  ['254'])
         self.interfaces = { 'wifi' : '00:00:00:00:00:01',
-                            '4g'   : '00:00:00:00:00:04',
+                            '4g'   : '00:00:00:00:00:02',
                             'priority' : 'wifi' }
         self.dpid = None
         self.awaiting_for_ARP = {}
@@ -376,10 +376,10 @@ def launch(disable_interactive_shell = False):
     core.register("controller", controller)
     #thread.start_new_thread(test,())
     core.registerNew(MessengerNexus)
-    pool = SimpleAddressPool(network="10.0.0.0/24", first=2, count=1)
-    core.registerNew(ControllerDHCPD, listen_to_ports={'s1-eth2':'', 's1-eth3':''}, install_flow=True,
+    pool = SimpleAddressPool(network="192.168.1.0/24", first=2, count=1)
+    core.registerNew(ControllerDHCPD, listen_to_ports={'eth0':''}, install_flow=True,
                      router_address=core.controller.gateway, dns_address=core.controller.gateway,
-                     ip_address="10.0.0.254", pool=pool)
+                     ip_address="192.168.1.254", pool=pool)
     thread.start_new_thread(messenger_service, ())
     core.registerNew(DNSSpy)
 
