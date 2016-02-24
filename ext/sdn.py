@@ -203,8 +203,90 @@ class Controller(object):
     def clear_IP_to_interface_map(self):
         self.IP_to_Interface_Map = {}
 
+    def add_flow(self, priority, dl_type, nw_dst, nw_src, queue_id, action, interface):
+        #TODO: Add low-level checking
+        of_msg = of.ofp_flow_mod()
+        of_msg.priority = int(priority)
+        of_msg.match.dl_type = dl_type
+        of_msg.match.nw_dst = nw_dst
+        of_msg.match.nw_src = nw_src
 
+        if action == 'forward':
+            port = of.OFPP_NORMAL
 
+            if queue_id is not None:
+                if interface == 'wifi':
+                    of_msg.actions.append(of.ofp_action_enqueue(port=1, \
+                            queue_id=int(queue_id)))
+                    of_msg.actions.append(of.ofp_action_enqueue(port=2, \
+                            queue_id=int(queue_id)))
+                elif interface == '4g':
+                    of_msg.actions.append(of.ofp_action_enqueue(port=1, \
+                            queue_id=int(queue_id)))
+                    of_msg.actions.append(of.ofp_action_enqueue(port=3, \
+                            queue_id=int(queue_id)))
+            else:
+                of_msg.actions.append(of.ofp_action_output(port=port))
+        else:
+            of_msg.actions = []
+
+        self.current_connection.send(of_msg)
+
+class AddFlowService(object):
+    def __init__ (self, parent, con, event):
+        self.con = con
+        self.parent = parent
+        self.listeners = con.addListeners(self)
+
+        # We only just added the listener, so dispatch the first
+        # message manually.
+        self._handle_MessageReceived(event, event.msg)
+
+    def _handle_ConnectionClosed(self, event):
+        self.con.removeListeners(self.listeners)
+        self.parent.clients.pop(self.con, None)
+
+    def _handle_MessageReceived (self, event, msg):
+        if msg.get('CHANNEL') != 'add_flow':
+            # drop msg target for other channels
+            return
+
+        # TODO: Add proper low level checking
+        of_msg = of.ofp_flow_mod()
+
+        priority = int(msg.get('priority'))
+        dl_type = int(msg.get('dl_type'))
+        nw_dst = IPAddr(msg.get('nw_dst'))
+        nw_src = IPAddr(msg.get('nw_src'))
+        interface = IPAddr(msg.get('interface'))
+
+        queue_id = msg.get('queue_id')
+
+        action = msg.get('output')
+
+        print priority
+        print dl_type
+        print nw_dst
+        print nw_src
+        print queue_id
+        print action
+        print interface
+
+        core.controller.add_flow(priority, dl_type, nw_dst, \
+                nw_src, queue_id, action, interface)
+
+        self.con.send(reply(msg, msg = str("Successfully installed")))
+        print 'done'
+        return
+
+class AddFlowBot(ChannelBot):
+    def _init(self, extra):
+        self.clients = {}
+    def _unhandled(self, event):
+        if event.msg.get('CHANNEL') == 'add_flow':
+            connection = event.con
+            if connection not in self.clients:
+                self.clients[connection] = AddFlowService(self, connection, event)
 
 def test():
     print '\nTest thread is running'
@@ -334,6 +416,8 @@ class Messenger(object):
         ChangeInterfaceBot(core.MessengerNexus.get_channel("change_interface"))
         # Set up the "Helper" service
         HelperBot(core.MessengerNexus.get_channel(""))
+        # Set up the "add_flow" service
+        AddFlowBot(core.MessengerNexus.get_channel("add_flow"))
 
     def _handle_MessengerNexus_ChannelCreate (self, event):
         # It's a new channel -- put in an HelperBot
