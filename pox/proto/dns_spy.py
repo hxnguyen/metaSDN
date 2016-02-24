@@ -70,13 +70,26 @@ class DNSSpy (EventMixin):
 
   def _handle_ConnectionUp (self, event):
     if self._install_flow:
+      # incoming DNS
       msg = of.ofp_flow_mod()
       msg.match = of.ofp_match()
       msg.match.dl_type = pkt.ethernet.IP_TYPE
       msg.match.nw_proto = pkt.ipv4.UDP_PROTOCOL
       msg.match.tp_src = 53
+      msg.priority = 10
       msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
       event.connection.send(msg)
+      # outgoing DNS
+      msg = of.ofp_flow_mod()
+      msg.match = of.ofp_match()
+      msg.match.dl_type = pkt.ethernet.IP_TYPE
+      msg.match.nw_proto = pkt.ipv4.UDP_PROTOCOL
+      msg.match.tp_dst = 53
+      msg.priority = 10
+      msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
+      event.connection.send(msg)
+
+
 
   def lookup (self, something):
     if something in self.name_to_ip:
@@ -114,12 +127,15 @@ class DNSSpy (EventMixin):
 
   def _handle_PacketIn (self, event):
     p = event.parsed.find('dns')
-
+    #print "here"
     if p is not None and p.parsed:
       log.debug(p)
 
       for q in p.questions:
+        #print "here2"
+        print q.name
         if q.qclass != 1: continue # Internet only
+        #print "here3"
         self.raiseEvent(DNSLookup, q)
 
       def process_q (entry):
@@ -137,6 +153,7 @@ class DNSSpy (EventMixin):
             log.info("add dns entry: %s %s" % (entry.rddata, entry.name))
 
       for answer in p.answers:
+        #print "here4"
         process_q(answer)
       for addition in p.additional:
         process_q(addition)

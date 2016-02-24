@@ -226,7 +226,7 @@ class DHCPD (EventMixin):
   def __init__ (self, ip_address = "192.168.1.254", router_address = (),
                 dns_address = (), pool = None, subnet = None,
                 install_flow = True):
-
+    EventMixin.__init__(self)
     def fix_addr (addr, backup):
       if addr is None: return None
       if addr is (): return IPAddr(backup)

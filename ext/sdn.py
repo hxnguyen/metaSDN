@@ -10,15 +10,11 @@ from pox.lib.util import dpid_to_str, str_to_bool
 from pox.lib.revent import EventHalt, Event, EventMixin
 import time
 import thread
-import pox.openflow.libopenflow_01 as of
-from pox.boot import *
 from pox.messenger.tcp_transport import *
-from pox.messenger.web_transport import *
-from pox.messenger.ajax_transport import *
-from pox.messenger.log_service import *
-from pox.messenger.example import *
 from pox.messenger import *
 from pox.proto.dhcpd import *
+from pox.py import *
+from pox.proto.dns_spy import *
 
 
 class Controller(object):
@@ -29,10 +25,12 @@ class Controller(object):
         self.ARP_table = {}
         self.IP_to_Interface_Map = {}
         self.gateway = '192.168.1.1'
+        self.dhcp_server = ".".join(self.gateway.split('.')[0:3] +  ['254'])
         self.interfaces = { 'wifi' : '00:00:00:00:00:01',
                             '4g'   : '00:00:00:00:00:02',
                             'priority' : 'wifi' }
         self.dpid = None
+        self.awaiting_for_ARP = {}
 
     def send_arp_reply(self, connection, src_mac, src_ip, dst_mac, dst_ip, port_out):
         r = arp()
@@ -67,6 +65,14 @@ class Controller(object):
         connection.send(msg)
 
     def _handle_PacketIn(self, event):
+        """
+        Args:
+            event: event contains incoming packet
+
+        Returns: None
+        Handle ARP request for gateway and dhcp server mac address
+
+        """
         self.dpid = event.connection.dpid
         inport = event.port
         packet = event.parsed
@@ -77,6 +83,19 @@ class Controller(object):
         if not a:
             return
         if a.opcode == arp.REPLY:
+            if a.protosrc.toStr() == self.gateway or a.protosrc.toStr() == self.dhcp_server:
+                # Drop controller generated ARP packets
+                return
+            if a.protosrc.toStr() in self.awaiting_for_ARP.keys():
+                # ARP reply received from the IP address we want
+                interface = self.awaiting_for_ARP.pop(a.protosrc.toStr()) # remove from memorized dictionary
+                self.send_arp_reply(self.current_connection, self.interfaces[interface], self.gateway,
+                            a.hwsrc.toStr(), a.protosrc.toStr(), of.OFPP_FLOOD)
+                self.IP_to_Interface_Map[a.protosrc.toStr()] = interface
+                self.ARP_table[a.protosrc.toStr()] = a.hwsrc.toStr()
+                print self.IP_to_Interface_Map
+                return
+            # Unintended ARPs from clients
             self.ARP_table[a.protosrc.toStr()] = a.hwsrc.toStr()
             self.IP_to_Interface_Map[a.protosrc.toStr()] = self.interfaces['priority']
             return
@@ -85,13 +104,40 @@ class Controller(object):
             if a.protodst.toStr() == self.gateway:
                 # Perform ARP lookup here
                 if a.protosrc.toStr() in self.IP_to_Interface_Map.keys():
-                    self.send_arp_reply(self.current_connection, self.ARP_table[a.protosrc.toStr()],
-                                        self.gateway, a.hwsrc.toStr(), a.protosrc.toStr(), inport)
+                    self.send_arp_reply(self.current_connection,
+                                        self.interfaces[self.IP_to_Interface_Map[a.protosrc.toStr()]],
+                                        self.gateway,
+                                        a.hwsrc.toStr(),
+                                        a.protosrc.toStr(),
+                                        inport)
                 else:
                     # Default is using priority interface as specified in self.interfaces
-                    self.send_arp_reply(self.current_connection, self.interfaces[self.interfaces['priority']],
-                                        self.gateway, a.hwsrc.toStr(), a.protosrc.toStr(), inport)
+                    self.send_arp_reply(self.current_connection,
+                                        self.interfaces[self.interfaces['priority']],
+                                        self.gateway,
+                                        a.hwsrc.toStr(),
+                                        a.protosrc.toStr(),
+                                        inport)
                     # Add IP to ARP lookup table
+                    self.IP_to_Interface_Map[a.protosrc.toStr()] = self.interfaces['priority']
+                    self.ARP_table[a.protosrc.toStr()] = a.hwsrc.toStr()
+                return
+
+            if a.protodst.toStr() == self.dhcp_server:
+                if a.protodst.toStr() in self.IP_to_Interface_Map.keys():
+                    self.send_arp_reply(self.current_connection,
+                                        self.interfaces[self.IP_to_Interface_Map[a.a.protosrc.toStr()]],
+                                        self.dhcp_server,
+                                        a.hwsrc.toStr(),
+                                        a.protosrc.toStr(),
+                                        inport)
+                else:
+                    self.send_arp_reply(self.current_connection,
+                                        self.interfaces[self.interfaces['priority']],
+                                        self.dhcp_server,
+                                        a.hwsrc.toStr(),
+                                        a.protosrc.toStr(),
+                                        inport)
                     self.IP_to_Interface_Map[a.protosrc.toStr()] = self.interfaces['priority']
                     self.ARP_table[a.protosrc.toStr()] = a.hwsrc.toStr()
 
@@ -99,17 +145,21 @@ class Controller(object):
         # print self.ARP_table
 
     def getMacAddressOverNetwork(self, dst_ip):
-        while dst_ip not in self.ARP_table.keys():
-            print 'Sending ARP request for %s\n'  % (dst_ip)
+        timeout = 10
+        while dst_ip not in self.ARP_table.keys() and timeout > 0:
+            log.info("Sending ARP request for %s" ,dst_ip)
             self.send_arp_request(self.current_connection, src_mac=self.interfaces[self.interfaces['priority']],
                               src_ip=self.gateway, dst_ip=dst_ip, port_out=of.OFPP_FLOOD)
-            time.sleep(3)
-        print "\nMac address of %s is %s\n" % (dst_ip, self.ARP_table[dst_ip])
+            time.sleep(1)
+            timeout = timeout - 1
+        if timeout == 0 and dst_ip not in self.ARP_table.keys():
+            log.warning("ARP request timeout. Controller cannot obtain MAC of %s", dst_ip)
+        log.info("MAC address of %s is %s", dst_ip, self.ARP_table[dst_ip])
 
 
 
     def _handle_ConnectionUp(self, event):
-        print "Switch %s has come up." % (event.dpid)
+        log.info("Switch %s has come up." ,event.dpid)
         self.current_connection = event.connection
         self.switch_hwaddr = dpid_to_str(event.dpid)
         # print self.switch_hwaddr
@@ -129,20 +179,10 @@ class Controller(object):
     def setInterfaceForIP(self, ip, interface):
 
         if interface not in self.interfaces.keys():
-            print "\nUnknown interface."
+            log.warning("Unknown interface.")
             return
-
+        self.awaiting_for_ARP[ip] = interface
         thread.start_new_thread(self.getMacAddressOverNetwork, (ip, ) )
-
-        while ip not in self.ARP_table.keys():
-            #thread.start_new_thread(self.getMacAddressOverNetwork, (ip, ) )
-            #sleep(3)
-            pass
-
-        self.send_arp_reply(self.current_connection, self.interfaces[interface], self.gateway,
-                            self.ARP_table[ip], ip, of.OFPP_FLOOD)
-        self.IP_to_Interface_Map[ip] = interface
-        print self.IP_to_Interface_Map
 
     def setPriorityInterface(self, interface):
         self.interfaces['priority'] = interface
@@ -220,11 +260,11 @@ class ChangeInterfaceService(object):
         interface = str(interface)
         priority = msg.get('priority')
         priority = str(priority)
-        if ip is None:
-            if priority is None:
+        if ip == 'None':
+            if priority == 'None':
                 self.con.send(reply(msg, msg = str("Neither IP nor Priority Interface Provided")))
                 return
-        if priority is not None:
+        if priority != 'None':
             core.controller.setPriorityInterface(priority)
             self.con.send(reply(msg, msg= str('Priority interface is now ' + priority)))
             print core.controller.interfaces
@@ -232,7 +272,7 @@ class ChangeInterfaceService(object):
 
         # print ip + " " + interface + "\n"
         if interface not in ['wifi', '4g', 'priority']:
-            self.con.send(reply(msg,msg = "Unknown interface"))
+            self.con.send(reply(msg,msg = "Unknown interface. Available interface are: 'wifi', '4g', 'priority'"))
         core.controller.setInterfaceForIP(ip, interface)
         self.con.send(reply(msg, msg = str(ip + ' is using ' + interface)))
 
@@ -245,21 +285,51 @@ class ChangeInterfaceBot(ChannelBot):
             if connection not in self.clients:
                 self.clients[connection] = ChangeInterfaceService(self, connection, event)
 
+class HelperService(object):
+    def __init__ (self, parent, con, event):
+        self.con = con
+        self.parent = parent
+        self.listeners = con.addListeners(self)
 
+        # We only just added the listener, so dispatch the first
+        # message manually.
+        self._handle_MessageReceived(event, event.msg)
+
+    def _handle_ConnectionClosed (self, event):
+        self.con.removeListeners(self.listeners)
+        self.parent.clients.pop(self.con, None)
+
+    def _handle_MessageReceived (self, event, msg):
+        if msg.get('CHANNEL') != '':
+            # drop msg target for other channels
+            return
+
+        self.con.send(reply(msg, msg = str("This is helper channel.\n" +
+                                           "Available channels: 'default', 'change_interface', 'add_flow'\n")))
+
+
+class HelperBot(ChannelBot):
+    def _init(self, extra):
+        self.clients = {}
+    def _unhandled(self, event):
+        if event.msg.get('CHANNEL') == '':
+            connection = event.con
+            if connection not in self.clients:
+                self.clients[connection] = HelperService(self, connection, event)
 class Messenger(object):
     def __init__(self):
         core.listen_to_dependencies(self)
 
     def _all_dependencies_met (self):
-        # Set up the "controller" service
+        # Set up the "change interface" service
         ChangeInterfaceBot(core.MessengerNexus.get_channel("change_interface"))
-        core.MessengerNexus.default_bot.add_bot(EchoBot)
+        # Set up the "Helper" service
+        HelperBot(core.MessengerNexus.get_channel(""))
 
     def _handle_MessengerNexus_ChannelCreate (self, event):
-        if event.channel.name.startswith("echo_"):
-            # Ah, it's a new echo channel -- put in an EchoBot
-            # Information about bot can be found in pox/messenger/__init__.py
-            EchoBot(event.channel)
+        # It's a new channel -- put in an HelperBot
+        # Information about bot can be found in pox/messenger/__init__.py
+        HelperBot(event.channel)
 
 
 class ControllerDHCPD(DHCPD):
@@ -289,9 +359,8 @@ class ControllerDHCPD(DHCPD):
             log.warn("No port %s on DPID %s", self._listen_to_ports,
             dpid_to_str(self._dpid))
             return
-        print "DHCP service serving for incoming requests on: "
         for port_name, port_no in self._listen_to_ports.items():
-            print port_name + " : " + port_no + "\n"
+            log.info("DHCP service serving for incoming requests on: %s (port_name) : %s (port_number)", port_name, port_no)
         return super(ControllerDHCPD,self)._handle_ConnectionUp(event)
 
     def _handle_PacketIn (self, event):
@@ -302,16 +371,19 @@ class ControllerDHCPD(DHCPD):
         return super(ControllerDHCPD,self)._handle_PacketIn(event)
 
 
-def launch():
+def launch(disable_interactive_shell = False):
     controller = Controller()
     core.register("controller", controller)
     #thread.start_new_thread(test,())
     core.registerNew(MessengerNexus)
     pool = SimpleAddressPool(network="192.168.1.0/24", first=2, count=1)
-    core.registerNew(ControllerDHCPD, listen_to_ports={'eth0':""}, install_flow=True,
+    core.registerNew(ControllerDHCPD, listen_to_ports={'eth0':''}, install_flow=True,
                      router_address=core.controller.gateway, dns_address=core.controller.gateway,
                      ip_address="192.168.1.254", pool=pool)
     thread.start_new_thread(messenger_service, ())
+    core.registerNew(DNSSpy)
+
+
 
 
 
