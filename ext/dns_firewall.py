@@ -7,6 +7,8 @@ import pox.openflow.libopenflow_01 as of
 import pox.lib.packet as pkt
 from pox.lib.addresses import IPAddr
 import pox.lib.packet.dns as pkt_dns
+import time
+import threading
 
 
 
@@ -52,17 +54,60 @@ class DNSFirewall(EventMixin):
         self.addListener(DNSUpdateNotification, self._handle_DNSUpdateNotification)
         self.addListener(DNSAnswerNotification, self._handle_DNSAnswerNotification)
 
+        threading._start_new_thread(self.auto_blocking_remover, ())
+
+    def auto_blocking_remover(self):
+        """
+        Make blocking policy actually expired
+
+        """
+        while True:
+            try:
+                for domain in self.blocking.keys():
+                    if self.blocking[domain] != "Unlimited":
+                        self.blocking[domain] -= 1
+                        if self.blocking[domain] <= 0:
+                            self.unblock_this_domain_global(domain)
+                            log.info("[ DNS Policy Updated ] %s is unblocked due to policy expired", domain)
+                time.sleep(60)
+            except (KeyboardInterrupt, SystemExit):
+                break
+
     def block_this_domain_global(self, domain, expire):
-        if expire != "Unlimited":
+        if str(expire) != "Unlimited":
             _expire = int(expire)
-            self.block_this_domain_global(domain, _expire)
+            self.blocking[domain] = _expire
             return
 
         self.blocking[domain] = expire
 
-    def unblock_this_doamin_global(self, domain):
+        if domain in self.name_to_ip:
+            ip_lists = self.name_to_ip[domain]
+            msg = of.ofp_flow_mod()
+            msg.match = of.ofp_match()
+            msg.match.dl_type = pkt.ethernet.IP_TYPE
+            msg.actions = []
+            msg.priority = 4321
+            for ip in ip_lists:
+                #print ip
+                msg.match.nw_dst = IPAddr(str(ip))
+                self.current_connection.send(msg)
+
+    def unblock_this_domain_global(self, domain):
         if domain in self.blocking.keys():
             del self.blocking[domain]
+        if domain in self.name_to_ip:
+            ip_lists = self.name_to_ip[domain]
+            msg = of.ofp_flow_mod()
+            msg.command = of.OFPFC_DELETE
+            msg.match = of.ofp_match()
+            msg.match.dl_type = pkt.ethernet.IP_TYPE
+            msg.actions = []
+            msg.priority = 4321
+            for ip in ip_lists:
+                #print ip
+                msg.match.nw_dst = IPAddr(str(ip))
+                self.current_connection.send(msg)
 
     def block_host_from_accessing_domain(self, domain, src_ip, src_mac):
         pass
@@ -120,6 +165,7 @@ class DNSFirewall(EventMixin):
 
     def _handle_DNSAnswerNotification(self, event):
         log.info("DSN Result: %s is at %s", event.question.name, event.answer.rddata)
+
     def _handle_ConnectionUp (self, event):
         self.current_connection = event.connection
         if self._install_flow:
@@ -168,6 +214,7 @@ class DNSFirewall(EventMixin):
                 self.raiseEvent(DNSLookupNotification, question, src_ip, src_mac)
 
                 for answer in dns_packet.answers:
+                    #log.info("%d TTL", answer.ttl)
                     self.process_q(answer)
                     self.raiseEvent(DNSAnswerNotification, question, answer)
                 if dns_packet.additional != "":
