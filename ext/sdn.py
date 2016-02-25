@@ -1,6 +1,12 @@
 # Author: Thien Pham (c) 2016
-# SDN controller: change routing to the internet for specific IP
-#
+# SDN controller which turns an openvswitch switch into a router
+# Features:
+# DHCP Server on specific port with configurable subnet and ip range
+# Change routing to the internet (via wifi or 4g interface) for specific IP
+# DNS firewall: block traffic to specific domain name with custom expire time
+# TODO: IP load balancing
+# Communication channels to external program to set: default, interface, add flow, dns firewall, ...
+
 from pox.core import core
 
 from pox.lib.packet.ethernet import ethernet, ETHER_BROADCAST
@@ -17,6 +23,8 @@ from pox.messenger import MessengerNexus, reply, ChannelBot
 from pox.proto.dhcpd import DHCPD, SimpleAddressPool
 from pox.py import *
 import pox.lib.packet.dns as pkt_dns
+from dns_firewall import DNSFirewall
+#from pox.proto.dns_spy import DNSSpy
 
 log = core.getLogger()
 
@@ -167,6 +175,7 @@ class Controller(object):
 
         if timeout == 0 and dst_ip not in self.ARP_table.keys():
             log.warning("ARP request timeout. Controller cannot obtain MAC of %s", dst_ip)
+            return
         log.info("MAC address of %s is %s", dst_ip, self.ARP_table[dst_ip])
 
 
@@ -413,6 +422,84 @@ class HelperBot(ChannelBot):
             if connection not in self.clients:
                 self.clients[connection] = HelperService(self, connection, event)
 
+
+#
+#   DNS Firewall backend service section
+#
+class DNSFirewallService(object):
+    def __init__(self, parent, con, event):
+        self.con = con
+        self.parent = parent
+        self.listeners = con.addListeners(self)
+
+        self._handle_MessageReceived(event, event.msg)
+
+    def _handle_ConnectionClosed(self, event):
+        self.con.removeListeners(self.listeners)
+        self.parent.clients.pop(self.con, None)
+
+    def _handle_MessageReceived(self, event, msg):
+        if msg.get('CHANNEL') != 'dns_firewall':
+            return
+        blocking_global_domain = str(msg.get('block_global'))
+        blocking_expire = str(msg.get('expire'))
+        if blocking_expire == 'None':
+            blocking_expire = "Unlimited"
+        if blocking_global_domain != 'None':
+            core.DNSFirewall.block_this_domain_global(blocking_global_domain, blocking_expire)
+            self.con.send(reply(msg, msg=str(blocking_global_domain +
+                                            " is blocked globally. Expired in " + blocking_expire)))
+        unblocking_global_domain = str(msg.get('unblock_global'))
+        if unblocking_global_domain != 'None':
+            core.DNSFirewall.unblock_this_doamin_global(unblocking_global_domain)
+            self.con.send(reply(msg, msg=str(unblocking_global_domain + " is unblocked.")))
+
+class DNSFirewallBot(ChannelBot):
+
+    def _init(self, extra):
+        self.clients = {}
+
+    def _unhandled(self, event):
+        if event.msg.get('CHANNEL') == "dns_firewall":
+            connection = event.con
+            if connection not in self.clients:
+                self.clients[connection] = DNSFirewallService(self, connection, event)
+
+#
+#   IP Load Balance backend service section
+#
+
+class IPLoadBalanceService(object):
+    def __init__(self, parent, con, event):
+        self.con = con
+        self.parent = parent
+        self.listeners = con.addListeners(self)
+
+        self._handle_MessageReceived(event, event.msg)
+
+    def _handle_ConnectionClosed(self, event):
+        self.con.removeListeners(self.listeners)
+        self.parent.clients.pop(self.con, None)
+
+    def _handle_MessageReceived(self, event, msg):
+        if msg.get('CHANNEL') != 'ip_load_balance':
+            return
+
+class IPLoadBalanceBot(ChannelBot):
+
+    def _init(self, extra):
+        self.clients = {}
+
+    def _unhandled(self, event):
+        if event.msg.get('CHANNEL') == "ip_load_balance":
+            connection = event.con
+            if connection not in self.clients:
+                self.clients[connection] = DNSFirewallService(self, connection, event)
+
+#
+#   Messenger  section
+#
+
 class Messenger(object):
     def __init__(self):
         core.listen_to_dependencies(self)
@@ -424,6 +511,8 @@ class Messenger(object):
         HelperBot(core.MessengerNexus.get_channel(""))
         # Set up the "add_flow" service
         AddFlowBot(core.MessengerNexus.get_channel("add_flow"))
+        # Set up the "dns_firewall" service
+        DNSFirewallBot(core.MessengerNexus.get_channel("dns_firewall"))
 
     def _handle_MessengerNexus_ChannelCreate (self, event):
         # It's a new channel -- put in an HelperBot
@@ -463,68 +552,7 @@ class ControllerDHCPD(DHCPD):
             return
         return super(ControllerDHCPD,self)._handle_PacketIn(event)
 
-class DNSUpdateNotification(Event):
-    def __init__(self):
-        EventMixin.__init__()
 
-
-
-class DNSLookupNotification(Event):
-
-    def __init__(self, pkt_dns_question):
-        Event.__init__()
-        log.info("here")
-        self.name = pkt_dns_question.name
-        self.qtype = pkt_dns_question.qtype
-        log.info("%s is looking for %s", pkt_dns_question.protosrc.toStr(), self.name)
-    #def check_for_blocking(self):
-    #    pass
-
-class DNSFirewall(EventMixin):
-
-    _eventMixin_events = set([ DNSUpdateNotification, DNSLookupNotification ])
-
-    def __init__(self, install_flow = True):
-        self._install_flow = install_flow
-        self.ip_to_name_map = {}
-        self.name_to_ip_map = {}
-        self.cname = {}
-        self.blocking = {}
-        core.openflow.addListeners(self)
-
-    def block_this_domain(self, domain, expire):
-        self.blocking[domain] = expire
-
-    def _handle_ConnectionUp (self, event):
-        if self._install_flow:
-            # incoming DNS
-            msg = of.ofp_flow_mod()
-            msg.match = of.ofp_match()
-            msg.match.dl_type = pkt.ethernet.IP_TYPE
-            msg.match.nw_proto = pkt.ipv4.UDP_PROTOCOL
-            msg.match.tp_src = 53
-            msg.priority = 10
-            msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
-            event.connection.send(msg)
-            # outgoing DNS
-            msg = of.ofp_flow_mod()
-            msg.match = of.ofp_match()
-            msg.match.dl_type = pkt.ethernet.IP_TYPE
-            msg.match.nw_proto = pkt.ipv4.UDP_PROTOCOL
-            msg.match.tp_dst = 53
-            msg.priority = 10
-            msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
-            event.connection.send(msg)
-
-    def _handle_PacketIn(self, event):
-        dns_packet = event.parsed.find('dns')
-        if dns_packet is not None and dns_packet.parsed:
-            #log.info(p)
-            for question in dns_packet.questions:
-                if question.qclass != 1:
-                    continue # internet only
-                self.raiseEvent(DNSLookupNotification, question)
-                print "here3"
 
 
 def launch(disable_interactive_shell = False):
@@ -532,10 +560,10 @@ def launch(disable_interactive_shell = False):
     core.register("controller", controller)
     thread.start_new_thread(test,())
     core.registerNew(MessengerNexus)
-    pool = SimpleAddressPool(network="192.168.1.0/24", first=2, last=253, count=1)
+    pool = SimpleAddressPool(network="192.168.1.0/24", first=10, last=253, count=1)
     core.registerNew(ControllerDHCPD, listen_to_ports={'eth0':''}, install_flow=True,
                      router_address=core.controller.gateway, dns_address=core.controller.gateway,
-                     ip_address="192.168.1.254", pool=pool)
+                     ip_address=core.controller.dhcp_server, pool=pool)
     thread.start_new_thread(messenger_service, ())
     core.registerNew(DNSFirewall)
 
