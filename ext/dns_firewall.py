@@ -20,17 +20,26 @@ class DNSUpdateNotification(Event):
 
 class DNSLookupNotification(Event):
 
-    def __init__(self, pkt_dns_question, src_ip, src_mac):
+    def __init__(self, dns_question, src_ip, src_mac):
         Event.__init__(self)
-        self.name = pkt_dns_question.name
-        self.qtype = pkt_dns_question.qtype
+        self.name = dns_question.name
+        self.qtype = dns_question.qtype
         self.src_ip = src_ip
         self.src_mac = src_mac
+
+class DNSAnswerNotification(Event):
+
+    def __init__(self, dns_question, dns_answer):
+        Event.__init__(self)
+        self.question = dns_question
+        self.answer   = dns_answer
 
 
 class DNSFirewall(EventMixin):
 
-    _eventMixin_events = set([ DNSUpdateNotification, DNSLookupNotification ])
+    _eventMixin_events = set([ DNSUpdateNotification,
+                               DNSLookupNotification,
+                               DNSAnswerNotification])
 
     def __init__(self, install_flow = True):
         self._install_flow = install_flow
@@ -41,9 +50,19 @@ class DNSFirewall(EventMixin):
         core.openflow.addListeners(self)
         self.addListener(DNSLookupNotification, self._handle_DNSLookupNotification)
         self.addListener(DNSUpdateNotification, self._handle_DNSUpdateNotification)
+        self.addListener(DNSAnswerNotification, self._handle_DNSAnswerNotification)
 
     def block_this_domain_global(self, domain, expire):
+        if expire != "Unlimited":
+            _expire = int(expire)
+            self.block_this_domain_global(domain, _expire)
+            return
+
         self.blocking[domain] = expire
+
+    def unblock_this_doamin_global(self, domain):
+        if domain in self.blocking.keys():
+            del self.blocking[domain]
 
     def block_host_from_accessing_domain(self, domain, src_ip, src_mac):
         pass
@@ -87,16 +106,20 @@ class DNSFirewall(EventMixin):
 
     def _handle_DNSLookupNotification(self, event):
 
-        def check_for_blocking(domain):
+        def check_for_blocking_global(domain):
             if self.is_blocking_global(domain):
-                return "BLOCKED"
-            return "NON-BLOCKED"
+                return "BLOCKED GLOBAL"
+            return "NON-BLOCKED GLOBAL"
 
-        log.info("Host at %s [%s] DNS lookup for %s, question type = %s, which is %s", event.src_ip, event.src_mac,
-                 event.name, event.qtype, check_for_blocking(event.name))
+
+        log.info("Host at %s [%s] DNS lookup for [ %s ] [QTYPE = %s] [ %s ]", event.src_ip, event.src_mac,
+                 event.name, event.qtype, check_for_blocking_global(event.name))
 
     def _handle_DNSUpdateNotification(self, event):
-        log.info("CNAME lists is now %s", self.cname)
+        log.info("%s is being updated", event.item)
+
+    def _handle_DNSAnswerNotification(self, event):
+        log.info("DSN Result: %s is at %s", event.question.name, event.answer.rddata)
     def _handle_ConnectionUp (self, event):
         self.current_connection = event.connection
         if self._install_flow:
@@ -106,7 +129,7 @@ class DNSFirewall(EventMixin):
             msg.match.dl_type = pkt.ethernet.IP_TYPE
             msg.match.nw_proto = pkt.ipv4.UDP_PROTOCOL
             msg.match.tp_src = 53
-            msg.priority = 1000
+            msg.priority = 10
             msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
             event.connection.send(msg)
             # outgoing DNS
@@ -119,24 +142,7 @@ class DNSFirewall(EventMixin):
             msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
             event.connection.send(msg)
 
-    def _handle_PacketIn(self, event):
-        dns_packet = event.parsed.find('dns')
-        if dns_packet is not None and dns_packet.parsed:
-            #log.info(p)
-            src_ip =  event.parsed.payload.srcip
-            src_mac = event.parsed.src
-            for question in dns_packet.questions:
-                if question.qclass != 1:
-                    continue # internet only
-                self.raiseEvent(DNSLookupNotification, question, src_ip, src_mac)
-                if not self.is_blocking_global(question.name):
-                     e = event.parsed
-                     msg = of.ofp_packet_out()
-                     msg.data = e.pack()
-                     msg.actions.append(of.ofp_action_output(port=of.OFPP_FLOOD))
-                     self.current_connection.send(msg)
-
-            def process_q (entry):
+    def process_q (self, entry):
                 if entry.qclass != 1:
                     # Not internet
                     return
@@ -150,15 +156,30 @@ class DNSFirewall(EventMixin):
                         self.raiseEvent(DNSUpdateNotification, entry.name)
                         log.info("add dns entry: %s %s" % (entry.rddata, entry.name))
 
-            for answer in dns_packet.answers:
-                #print "here4"
-                process_q(answer)
-            for addition in dns_packet.additional:
-                process_q(addition)
+    def _handle_PacketIn(self, event):
+        dns_packet = event.parsed.find('dns')
+        if dns_packet is not None and dns_packet.parsed:
+            #log.info(p)
+            src_ip =  event.parsed.payload.srcip
+            src_mac = event.parsed.src
+            for question in dns_packet.questions:
+                if question.qclass != 1:
+                    continue # internet only
+                self.raiseEvent(DNSLookupNotification, question, src_ip, src_mac)
 
-            e = event.parsed
-            msg = of.ofp_packet_out()
-            msg.data = e.pack()
-            msg.actions.append(of.ofp_action_output(port=of.OFPP_FLOOD))
-            self.current_connection.send(msg)
+                for answer in dns_packet.answers:
+                    self.process_q(answer)
+                    self.raiseEvent(DNSAnswerNotification, question, answer)
+                if dns_packet.additional != "":
+                    for addition in dns_packet.additional:
+                        self.process_q(addition)
+                        self.raiseEvent(DNSAnswerNotification, question, addition)
+
+                if not self.is_blocking_global(question.name):
+                     e = event.parsed
+                     msg = of.ofp_packet_out()
+                     msg.data = e.pack()
+                     msg.actions.append(of.ofp_action_output(port=of.OFPP_FLOOD))
+                     self.current_connection.send(msg)
+
 

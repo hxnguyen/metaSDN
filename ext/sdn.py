@@ -422,6 +422,10 @@ class HelperBot(ChannelBot):
             if connection not in self.clients:
                 self.clients[connection] = HelperService(self, connection, event)
 
+
+#
+#   DNS Firewall backend service section
+#
 class DNSFirewallService(object):
     def __init__(self, parent, con, event):
         self.con = con
@@ -437,6 +441,18 @@ class DNSFirewallService(object):
     def _handle_MessageReceived(self, event, msg):
         if msg.get('CHANNEL') != 'dns_firewall':
             return
+        blocking_global_domain = str(msg.get('block_global'))
+        blocking_expire = str(msg.get('expire'))
+        if blocking_expire == 'None':
+            blocking_expire = "Unlimited"
+        if blocking_global_domain != 'None':
+            core.DNSFirewall.block_this_domain_global(blocking_global_domain, blocking_expire)
+            self.con.send(reply(msg, msg=str(blocking_global_domain +
+                                            " is blocked globally. Expired in " + blocking_expire)))
+        unblocking_global_domain = str(msg.get('unblock_global'))
+        if unblocking_global_domain != 'None':
+            core.DNSFirewall.unblock_this_doamin_global(unblocking_global_domain)
+            self.con.send(reply(msg, msg=str(unblocking_global_domain + " is unblocked.")))
 
 class DNSFirewallBot(ChannelBot):
 
@@ -448,6 +464,10 @@ class DNSFirewallBot(ChannelBot):
             connection = event.con
             if connection not in self.clients:
                 self.clients[connection] = DNSFirewallService(self, connection, event)
+
+#
+#   IP Load Balance backend service section
+#
 
 class IPLoadBalanceService(object):
     def __init__(self, parent, con, event):
@@ -476,6 +496,9 @@ class IPLoadBalanceBot(ChannelBot):
             if connection not in self.clients:
                 self.clients[connection] = DNSFirewallService(self, connection, event)
 
+#
+#   Messenger  section
+#
 
 class Messenger(object):
     def __init__(self):
@@ -488,6 +511,8 @@ class Messenger(object):
         HelperBot(core.MessengerNexus.get_channel(""))
         # Set up the "add_flow" service
         AddFlowBot(core.MessengerNexus.get_channel("add_flow"))
+        # Set up the "dns_firewall" service
+        DNSFirewallBot(core.MessengerNexus.get_channel("dns_firewall"))
 
     def _handle_MessengerNexus_ChannelCreate (self, event):
         # It's a new channel -- put in an HelperBot
