@@ -54,6 +54,7 @@ class DNSFirewall(EventMixin):
         self.addListener(DNSUpdateNotification, self._handle_DNSUpdateNotification)
         self.addListener(DNSAnswerNotification, self._handle_DNSAnswerNotification)
 
+        core.Interactive.variables['lookup'] = self.lookup
         threading._start_new_thread(self.auto_blocking_remover, ())
 
     def auto_blocking_remover(self):
