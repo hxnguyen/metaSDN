@@ -78,9 +78,8 @@ class DNSFirewall(EventMixin):
         if str(expire) != "Unlimited":
             _expire = int(expire)
             self.blocking[domain] = _expire
-            return
-
-        self.blocking[domain] = expire
+        else:
+            self.blocking[domain] = expire
 
         if domain in self.name_to_ip:
             ip_lists = self.name_to_ip[domain]
