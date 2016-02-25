@@ -458,11 +458,13 @@ class DNSFirewallService(object):
         if blocking_global_domain != 'None':
             core.DNSFirewall.block_this_domain_global(blocking_global_domain, blocking_expire)
             self.con.send(reply(msg, msg=str(blocking_global_domain +
-                                            " is blocked globally. Expired in " + blocking_expire)))
+                                            " is blocked globally. Expired in " + blocking_expire + " min(s)")))
+            log.info("[ DNS Policy Updated ] %s is blocked for %s min(s)", blocking_global_domain, blocking_expire)
         unblocking_global_domain = str(msg.get('unblock_global'))
         if unblocking_global_domain != 'None':
-            core.DNSFirewall.unblock_this_doamin_global(unblocking_global_domain)
+            core.DNSFirewall.unblock_this_domain_global(unblocking_global_domain)
             self.con.send(reply(msg, msg=str(unblocking_global_domain + " is unblocked.")))
+            log.info("[ DNS Policy Updated ] %s is unblocked", unblocking_global_domain)
 
 class DNSFirewallBot(ChannelBot):
 
