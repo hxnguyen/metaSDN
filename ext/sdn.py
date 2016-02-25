@@ -225,26 +225,41 @@ class Controller(object):
         of_msg.match.nw_dst = nw_dst
         of_msg.match.nw_src = nw_src
 
+        #: Ports: eth0 = 1, wifi = 2, eth3: 4g
         if action == 'forward':
             port = of.OFPP_NORMAL
 
             if queue_id is not None:
-                if interface == 'wifi':
-                    of_msg.actions.append(of.ofp_action_enqueue(port=1, \
-                            queue_id=int(queue_id)))
-                    of_msg.actions.append(of.ofp_action_enqueue(port=2, \
-                            queue_id=int(queue_id)))
-                elif interface == '4g':
-                    of_msg.actions.append(of.ofp_action_enqueue(port=1, \
-                            queue_id=int(queue_id)))
-                    of_msg.actions.append(of.ofp_action_enqueue(port=3, \
-                            queue_id=int(queue_id)))
+                of_msg.actions.append(of.ofp_action_enqueue(port=1, \
+                        queue_id=int(queue_id)))
+                of_msg.actions.append(of.ofp_action_enqueue(port=2, \
+                        queue_id=int(queue_id)))
+                of_msg.actions.append(of.ofp_action_enqueue(port=3, \
+                        queue_id=int(queue_id)))
             else:
                 of_msg.actions.append(of.ofp_action_output(port=port))
         else:
             of_msg.actions = []
 
         self.current_connection.send(of_msg)
+
+    def add_default_flow(self):
+        msg = of.ofp_flow_mod()
+        msg.priority = 1
+        msg.actions.append(of.ofp_action_output(port=of.OFPP_NORMAL))
+        msg.actions.append(of.ofp_action_output(port=of.OFPP_CONTROLLER))
+        self.current_connection.send(msg)
+
+        # DHCPD
+        msg = of.ofp_flow_mod()
+        msg.match = of.ofp_match()
+        msg.match.dl_type = pkt.ethernet.IP_TYPE
+        msg.match.nw_proto = pkt.ipv4.UDP_PROTOCOL
+        #msg.match.nw_dst = IP_BROADCAST
+        msg.match.tp_src = pkt.dhcp.CLIENT_PORT
+        msg.match.tp_dst = pkt.dhcp.SERVER_PORT
+        msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
+        self.current_connection.send(msg)
 
 class AddFlowService(object):
     def __init__ (self, parent, con, event):
@@ -268,26 +283,21 @@ class AddFlowService(object):
         # TODO: Add proper low level checking
         of_msg = of.ofp_flow_mod()
 
-        priority = int(msg.get('priority'))
-        dl_type = int(msg.get('dl_type'))
-        nw_dst = IPAddr(msg.get('nw_dst'))
-        nw_src = IPAddr(msg.get('nw_src'))
-        interface = IPAddr(msg.get('interface'))
-
-        queue_id = msg.get('queue_id')
-
         action = msg.get('output')
+        if action == 'default':
+            core.controller.add_default_flow()
+        elif action == 'delete':
+            core.controller.clear_flows()
+        else:
 
-        print priority
-        print dl_type
-        print nw_dst
-        print nw_src
-        print queue_id
-        print action
-        print interface
-
-        core.controller.add_flow(priority, dl_type, nw_dst, \
-                nw_src, queue_id, action, interface)
+            priority = int(msg.get('priority'))
+            dl_type = int(msg.get('dl_type'))
+            nw_dst = IPAddr(msg.get('nw_dst'))
+            nw_src = IPAddr(msg.get('nw_src'))
+            interface = msg.get('interface')
+            queue_id = msg.get('queue_id')
+            core.controller.add_flow(priority, dl_type, nw_dst, \
+                    nw_src, queue_id, action, interface)
 
         self.con.send(reply(msg, msg = str("Successfully installed")))
         print 'done'
@@ -324,11 +334,11 @@ def test():
                                                  # ,'10.0.0.1', '10.0.0.2', of.OFPP_FLOOD)
                 # time.sleep(5)
                 # core.controller.getMacAddressOverNetwork('10.0.0.2')
-                #thread.start_new_thread(core.controller.getMacAddressOverNetwork, ('10.0.0.2',))
-                #core.controller.setInterfaceForIP('192.168.1.9', 'wifi')
-                #time.sleep(4)
-                #core.controller.setInterfaceForIP('192.168.1.9', '4g')
-                #time.sleep(4)
+                # thread.start_new_thread(core.controller.getMacAddressOverNetwork, ('10.0.0.2',))
+                core.controller.setInterfaceForIP('192.168.1.11', 'wifi')
+                time.sleep(4)
+                core.controller.setInterfaceForIP('192.168.1.10', 'wifi')
+                time.sleep(4)
                 break
             break
 
