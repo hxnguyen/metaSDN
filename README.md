@@ -8,13 +8,13 @@ All codes located in folder ext/
 ```sh
 ext/sdn.py
 ext/dns_firewall.py
-```sh
+```
 
 [sdn.py] [sdn] is the main controller. To run the controller, type to shell:
 
 ```sh
 ./pox.py sdn
-```sh
+```
 
 Another loadable module is [dns_firewall.py] [dns] providing DNS Firewall service 
 to the controller. It is loaded by default when running [sdn.py] [sdn]
