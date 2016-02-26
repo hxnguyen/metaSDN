@@ -1,7 +1,9 @@
 # Programmable wireless access
+
 Copyright 2016 (c) Thien Pham
 
 ### Folder structure
+All codes located in folder ext/
 
 ```sh
 ext/sdn.py
