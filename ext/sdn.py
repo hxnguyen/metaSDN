@@ -30,12 +30,12 @@ log = core.getLogger()
 
 class Controller(object):
 
-    def __init__(self):
+    def __init__(self, install_flow = True):
         core.openflow.addListeners(self)
         self.current_connection = None
         self.ARP_table = {}
         self.IP_to_Interface_Map = {}
-        self.gateway = '192.168.1.1'
+        self.gateway = '10.0.0.1'
         self.dhcp_server = ".".join(self.gateway.split('.')[0:3] +  ['254'])
         self.interfaces = { 'wifi' : '00:00:00:00:00:01',
                             '4g'   : '00:00:00:00:00:02',
@@ -43,6 +43,7 @@ class Controller(object):
         self.dpid = None
         self.awaiting_for_ARP = {}
         self.switch_port_identity = {}
+        self._install_flow = install_flow
 
     def send_arp_reply(self, connection, src_mac, src_ip, dst_mac, dst_ip, port_out):
         r = arp()
@@ -190,6 +191,10 @@ class Controller(object):
             port_name, port_no = str(ports[port]).split(':')
             self.switch_port_identity[port_name] = port_no
 
+        if self._install_flow:
+            install_initial_flow()
+
+
     def getConnection(self):
         return self.current_connection
 
@@ -312,9 +317,7 @@ class AddFlowBot(ChannelBot):
             if connection not in self.clients:
                 self.clients[connection] = AddFlowService(self, connection, event)
 
-def test():
-    print '\nTest thread is running'
-
+def install_initial_flow():
     while(True):
         if core.controller.getConnection():
             msg = of.ofp_flow_mod()
@@ -322,24 +325,12 @@ def test():
             msg.actions.append(of.ofp_action_output(port=of.OFPP_NORMAL))
             msg.actions.append(of.ofp_action_output(port=of.OFPP_CONTROLLER))
             core.controller.getConnection().send(msg)
-            while (True):
-                print 'Inside test function'
-                # core.controller.send_arp_reply(core.controller.getConnection(),'00:00:00:00:00:01'
-                #                    , '10.0.0.1', '00:00:00:00:00:02', '10.0.0.2', 2)
-                # time.sleep(5)
-                # core.controller.send_arp_reply(core.controller.getConnection(),'00:00:00:00:00:06'
-                #                    , '10.0.0.1', '00:00:00:00:00:02', '10.0.0.2', 2)
-                # time.sleep(5)
-                #core.controller.send_arp_request(core.controller.getConnection(),'00:00:00:00:00:01'
-                                                 # ,'10.0.0.1', '10.0.0.2', of.OFPP_FLOOD)
-                # time.sleep(5)
-                # core.controller.getMacAddressOverNetwork('10.0.0.2')
-                # thread.start_new_thread(core.controller.getMacAddressOverNetwork, ('10.0.0.2',))
-                core.controller.setInterfaceForIP('192.168.1.11', 'wifi')
-                time.sleep(4)
-                core.controller.setInterfaceForIP('192.168.1.10', 'wifi')
-                time.sleep(4)
-                break
+            # while (True):
+            #     core.controller.setInterfaceForIP('192.168.1.11', 'wifi')
+            #     time.sleep(4)
+            #     core.controller.setInterfaceForIP('192.168.1.10', 'wifi')
+            #     time.sleep(4)
+            #     break
             break
 
 
@@ -567,13 +558,17 @@ class ControllerDHCPD(DHCPD):
 
 
 
-def launch(disable_interactive_shell = False):
+def launch(disable_interactive_shell = False, install_flow = True):
+
     controller = Controller()
     core.register("controller", controller)
-    thread.start_new_thread(test,())
+
+    # if install_flow:
+    #     thread.start_new_thread(install_initial_flow,())
+
     core.registerNew(MessengerNexus)
-    pool = SimpleAddressPool(network="192.168.1.0/24", first=10, last=253, count=1)
-    core.registerNew(ControllerDHCPD, listen_to_ports={'eth0':''}, install_flow=True,
+    pool = SimpleAddressPool(network="10.0.0.0/24", first=10, last=253, count=1)
+    core.registerNew(ControllerDHCPD, listen_to_ports={'s1-eth2':''}, install_flow=True,
                      router_address=core.controller.gateway, dns_address=core.controller.gateway,
                      ip_address=core.controller.dhcp_server, pool=pool)
     thread.start_new_thread(messenger_service, ())
