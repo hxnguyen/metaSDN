@@ -126,7 +126,6 @@ class DNSFirewall(EventMixin):
             return None
 
     def _record (self, ip, name):
-        # Handle reverse lookups correctly?
         modified = False
         val = self.ip_to_name.setdefault(ip, [])
         if name not in val:
