@@ -20,6 +20,18 @@ Another loadable module is [dns_firewall.py] [dns] providing DNS Firewall servic
 to the controller. It is loaded by default when running [sdn.py] [sdn]
 You may want referring to raspswitch setup [scripts] [scripts]
 
+### Features
+* DHCP server on specific ovs port, configurable subnet and ip range
+* Interface switching for specific IP: wifi or 4g
+* Flow install service
+* DNS Firewall
+* Multi-channel communication with this controller via JSON-formatted messages
+
+### TODO: 
+* IP load balance (will be in ext/ip_load_balance.py)
+* DNS firewall policy can apply to specific IP and MAC (current can block domain globally)
+* Desktop GUI if possible (i.e. using wxpython to create cross-platform GUI)
+
 # Original POX readme 
 POX is a networking software platform written in Python
 
