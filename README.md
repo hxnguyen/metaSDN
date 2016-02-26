@@ -31,6 +31,7 @@ You may want referring to raspswitch setup [scripts] [scripts]
 * IP load balance (will be in ext/ip_load_balance.py)
 * DNS firewall policy can apply to specific IP and MAC (current can block domain globally)
 * Desktop GUI if possible (i.e. using wxpython to create cross-platform GUI)
+* Solutions to visualize network topplogy, track hosts, RAT algorithms, ...
 
 # Original POX readme 
 POX is a networking software platform written in Python
